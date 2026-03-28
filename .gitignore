@@ -1,0 +1,49 @@
+## Data Science Additions ##
+# Data
+data/raw/
+data/raw_data/
+data/processed/
+data/interim/
+data/clean_data/
+
+# Models
+models/
+*.pkl
+*.h5
+*.joblib
+
+# Results and Logs
+notebooks/.ipynb_checkpoints
+reports/figures/
+outputs/
+*.log
+
+# RAG vector store
+knowledge_base/chroma_db/
+
+# Environment
+.env
+
+## Python Section ##
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+# Virtual environments
+.venv/
+venv/
+env/
+# IDE files (e.g. PyCharm)
+.idea/
+.spyderproject
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+## R Section ##
+# History files
+.Rhistory
+.Rapp.history
+# Session Data files
+.RData
+# RStudio files
+.Rproj.user/
+
