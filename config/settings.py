@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     ollama_model: str = Field(default="qwen3-coder:30b", description="Модель Ollama")
     ollama_base_url: str = Field(default="http://localhost:11434", description="URL сервера Ollama")
     hf_model: str = Field(
-        default="mistralai/Mistral-7B-Instruct-v0.3",
+        default="Qwen/Qwen2.5-Coder-32B-Instruct",
         description="Модель HuggingFace Inference API",
     )
     hf_token: str = Field(default="", description="Токен HuggingFace API")

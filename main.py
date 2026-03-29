@@ -13,6 +13,10 @@ import os
 import sys
 from pathlib import Path
 
+# Предотвращаем segfault от LightGBM/XGBoost на macOS при fork() в LangGraph
+os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 # Добавляем корень проекта в sys.path
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))

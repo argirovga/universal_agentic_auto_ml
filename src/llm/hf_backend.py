@@ -13,7 +13,7 @@ def create_hf_llm() -> ChatHuggingFace:
     """
     endpoint = HuggingFaceEndpoint(
         repo_id=settings.hf_model,
-        huggingfacehub_api_token=settings.hf_token,
+        huggingfacehub_api_token=settings.hf_token or None,
         temperature=settings.llm_temperature,
         max_new_tokens=settings.llm_max_tokens,
         task="text-generation",

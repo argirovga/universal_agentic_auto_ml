@@ -48,9 +48,17 @@ def _get_model_class(model_type: str):
         raise ValueError(f"Неизвестная модель: {model_type}. Доступные: {list(MODEL_REGISTRY.keys())}")
 
 
+# Кэш энкодеров, заполняется при обработке train, применяется к test
+_fitted_encoders: dict[str, LabelEncoder] = {}
+_train_medians: dict[str, float] = {}
+
+
 def _prepare_features(df: pd.DataFrame, is_train: bool = True) -> pd.DataFrame:
     """
     Подготовка признаков — кодирование категорий, обработка дат, удаление текстовых.
+
+    При is_train=True — фитит энкодеры и запоминает медианы.
+    При is_train=False — применяет ранее зафитенные энкодеры и медианы.
 
     Args:
         df: Исходный DataFrame.
@@ -59,20 +67,17 @@ def _prepare_features(df: pd.DataFrame, is_train: bool = True) -> pd.DataFrame:
     Returns:
         DataFrame с подготовленными признаками.
     """
+    global _fitted_encoders, _train_medians
     df = df.copy()
 
     # Удаляем текстовые колонки, которые не несут ML-информации
     drop_cols = ["name", "host_name", "_id"]
-    if is_train and settings.target_column in df.columns:
-        drop_cols_existing = [c for c in drop_cols if c in df.columns]
-    else:
-        drop_cols_existing = [c for c in drop_cols if c in df.columns]
+    drop_cols_existing = [c for c in drop_cols if c in df.columns]
     df = df.drop(columns=drop_cols_existing, errors="ignore")
 
     # Обработка даты last_dt
     if "last_dt" in df.columns:
         df["last_dt"] = pd.to_datetime(df["last_dt"], errors="coerce")
-        # Извлекаем признаки из даты
         reference_date = pd.Timestamp("2019-07-08")  # Последняя дата в датасете + 1
         df["days_since_last_review"] = (reference_date - df["last_dt"]).dt.days
         df["last_review_month"] = df["last_dt"].dt.month
@@ -80,16 +85,43 @@ def _prepare_features(df: pd.DataFrame, is_train: bool = True) -> pd.DataFrame:
 
     # Кодирование категориальных переменных
     cat_cols = df.select_dtypes(include=["object", "string"]).columns.tolist()
-    for col in cat_cols:
-        df[col] = df[col].fillna("unknown")
-        le = LabelEncoder()
-        df[col] = le.fit_transform(df[col].astype(str))
+    if is_train:
+        _fitted_encoders.clear()
+        for col in cat_cols:
+            df[col] = df[col].fillna("unknown").astype(str)
+            le = LabelEncoder()
+            df[col] = le.fit_transform(df[col])
+            _fitted_encoders[col] = le
+    else:
+        for col in cat_cols:
+            df[col] = df[col].fillna("unknown").astype(str)
+            if col in _fitted_encoders:
+                le = _fitted_encoders[col]
+                # Неизвестные категории заменяем на -1
+                known = set(le.classes_)
+                df[col] = df[col].map(
+                    lambda x, _known=known, _le=le: (
+                        _le.transform([x])[0] if x in _known else -1
+                    )
+                )
+            else:
+                le = LabelEncoder()
+                df[col] = le.fit_transform(df[col])
 
     # Заполнение пропусков в числовых колонках медианой
     num_cols = df.select_dtypes(include=["number"]).columns.tolist()
-    for col in num_cols:
-        if df[col].isna().any():
-            df[col] = df[col].fillna(df[col].median())
+    if is_train:
+        _train_medians.clear()
+        for col in num_cols:
+            if df[col].isna().any():
+                median_val = df[col].median()
+                _train_medians[col] = median_val
+                df[col] = df[col].fillna(median_val)
+    else:
+        for col in num_cols:
+            if df[col].isna().any():
+                median_val = _train_medians.get(col, df[col].median())
+                df[col] = df[col].fillna(median_val)
 
     return df
 
@@ -138,9 +170,11 @@ def train_model(model_type: str = "lightgbm", hyperparams: str = "{}") -> str:
         default_params["verbosity"] = -1 if model_type == "lightgbm" else 0
         default_params["n_estimators"] = params.pop("n_estimators", 500)
         default_params["learning_rate"] = params.pop("learning_rate", 0.05)
+        # Один поток — предотвращает segfault при fork() на macOS
+        default_params["n_jobs"] = 1
     elif model_type == "random_forest":
         default_params["n_estimators"] = params.pop("n_estimators", 200)
-        default_params["n_jobs"] = -1
+        default_params["n_jobs"] = 1
     elif model_type == "gradient_boosting":
         default_params["n_estimators"] = params.pop("n_estimators", 300)
         default_params["learning_rate"] = params.pop("learning_rate", 0.05)
@@ -210,10 +244,13 @@ def predict_and_submit(model_type: str = "lightgbm", hyperparams: str = "{}") ->
 
     test_features = _prepare_features(test_df, is_train=False)
 
-    # Выравниваем колонки — в тесте могут быть другие значения категорий
-    common_cols = [c for c in train_features.columns if c in test_features.columns]
-    train_features = train_features[common_cols]
-    test_features = test_features[common_cols]
+    # Выравниваем колонки — test должен иметь те же фичи, что и train
+    missing_in_test = set(train_features.columns) - set(test_features.columns)
+    for col in missing_in_test:
+        test_features[col] = 0
+    extra_in_test = set(test_features.columns) - set(train_features.columns)
+    test_features = test_features.drop(columns=list(extra_in_test), errors="ignore")
+    test_features = test_features[train_features.columns]
 
     # Создание и обучение модели на всех данных
     model_class = _get_model_class(model_type)
@@ -222,9 +259,10 @@ def predict_and_submit(model_type: str = "lightgbm", hyperparams: str = "{}") ->
         default_params["verbosity"] = -1 if model_type == "lightgbm" else 0
         default_params["n_estimators"] = params.pop("n_estimators", 500)
         default_params["learning_rate"] = params.pop("learning_rate", 0.05)
+        default_params["n_jobs"] = 1
     elif model_type == "random_forest":
         default_params["n_estimators"] = params.pop("n_estimators", 200)
-        default_params["n_jobs"] = -1
+        default_params["n_jobs"] = 1
     elif model_type == "gradient_boosting":
         default_params["n_estimators"] = params.pop("n_estimators", 300)
         default_params["learning_rate"] = params.pop("learning_rate", 0.05)
