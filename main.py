@@ -13,11 +13,9 @@ import os
 import sys
 from pathlib import Path
 
-# Предотвращаем segfault от LightGBM/XGBoost на macOS при fork() в LangGraph
 os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-# Добавляем корень проекта в sys.path
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -31,29 +29,24 @@ def setup_logging():
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     log_file = settings.output_dir / "run.log"
 
-    # Формат логов
     formatter = logging.Formatter(
         "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Консольный хэндлер
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
 
-    # Файловый хэндлер
     file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
 
-    # Корневой логгер
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
     root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
 
-    # Подавляем лишний вывод от библиотек
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("chromadb").setLevel(logging.WARNING)
@@ -91,7 +84,6 @@ def main():
     """Основная функция запуска пайплайна."""
     args = parse_args()
 
-    # Применяем аргументы к настройкам
     if args.provider:
         settings.llm_provider = args.provider
     if args.max_iterations:
@@ -102,7 +94,6 @@ def main():
         else:
             settings.hf_model = args.model
 
-    # Настройка логирования
     setup_logging()
     logger = logging.getLogger(__name__)
 
@@ -114,13 +105,11 @@ def main():
     logger.info("Макс. итераций: %d", settings.max_iterations)
     logger.info("Данные: %s", settings.raw_data_dir)
 
-    # Построение и запуск графа
     benchmark.start_pipeline()
 
     try:
         graph = build_graph()
 
-        # Начальное состояние
         initial_state = {
             "iteration": 0,
             "max_iterations": settings.max_iterations,
@@ -128,13 +117,11 @@ def main():
             "experiment_history": [],
         }
 
-        # Запуск пайплайна
         logger.info("Запуск LangGraph пайплайна...")
         final_state = graph.invoke(initial_state)
 
         benchmark.end_pipeline()
 
-        # Вывод результатов
         logger.info("=" * 60)
         logger.info("ПАЙПЛАЙН ЗАВЕРШЁН")
         logger.info("=" * 60)
@@ -144,7 +131,6 @@ def main():
         if final_state.get("submission_result"):
             logger.info("\n%s", final_state["submission_result"])
 
-        # Генерация benchmark отчёта
         report = benchmark.generate_report()
         logger.info("\n%s", report)
 

@@ -26,16 +26,13 @@ def index_knowledge_base(force_reindex: bool = False) -> chromadb.Collection:
     docs_dir = settings.knowledge_base_dir / "documents"
     chroma_dir = settings.chroma_db_dir
 
-    # Инициализация ChromaDB
     chroma_dir.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(path=str(chroma_dir))
 
-    # Эмбеддинг-функция (sentence-transformers, локальная)
     ef = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name=settings.embedding_model,
     )
 
-    # Проверяем, нужна ли переиндексация
     collection_name = "ml_knowledge_base"
     existing_collections = [c.name for c in client.list_collections()]
 
@@ -44,7 +41,6 @@ def index_knowledge_base(force_reindex: bool = False) -> chromadb.Collection:
         if collection.count() > 0:
             logger.info("База знаний уже проиндексирована (%d чанков). Пропускаем.", collection.count())
             return collection
-        # Коллекция пуста — удаляем и создаём заново
         client.delete_collection(name=collection_name)
 
     if collection_name in existing_collections and force_reindex:
@@ -56,7 +52,6 @@ def index_knowledge_base(force_reindex: bool = False) -> chromadb.Collection:
         metadata={"description": "База знаний ML best practices для агентов"},
     )
 
-    # Читаем и разбиваем документы на чанки
     all_chunks = []
     all_metadatas = []
     all_ids = []
@@ -77,7 +72,6 @@ def index_knowledge_base(force_reindex: bool = False) -> chromadb.Collection:
             all_ids.append(f"chunk_{chunk_id}")
             chunk_id += 1
 
-    # Добавляем в коллекцию
     if all_chunks:
         collection.add(
             documents=all_chunks,
@@ -104,7 +98,6 @@ def _split_into_chunks(text: str, chunk_size: int, overlap: int) -> list[str]:
     Returns:
         Список текстовых чанков.
     """
-    # Сначала пробуем разбить по разделам markdown
     sections = []
     current_section = []
     for line in text.split("\n"):
@@ -116,20 +109,17 @@ def _split_into_chunks(text: str, chunk_size: int, overlap: int) -> list[str]:
     if current_section:
         sections.append("\n".join(current_section))
 
-    # Если секции слишком длинные, разбиваем дальше
     chunks = []
     for section in sections:
         if len(section) <= chunk_size:
             chunks.append(section.strip())
         else:
-            # Разбиваем длинную секцию
             words = section.split()
             current_chunk = []
             current_len = 0
             for word in words:
                 if current_len + len(word) + 1 > chunk_size and current_chunk:
                     chunks.append(" ".join(current_chunk))
-                    # Оставляем overlap
                     overlap_words = current_chunk[-overlap // 10:] if overlap > 0 else []
                     current_chunk = overlap_words + [word]
                     current_len = sum(len(w) + 1 for w in current_chunk)

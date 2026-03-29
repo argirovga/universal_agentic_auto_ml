@@ -9,10 +9,8 @@ from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
-# Загрузка переменных окружения из .env
 load_dotenv()
 
-# Корневая директория проекта
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
@@ -54,6 +52,12 @@ class Settings(BaseSettings):
     r2_threshold: float = Field(default=0.5, description="Минимальный R² для остановки")
     training_timeout_sec: int = Field(default=300, description="Таймаут обучения модели (сек)")
 
+    # --- Guardrails ---
+    max_csv_size_mb: float = Field(default=500.0, description="Макс. размер CSV файла (МБ)")
+    rate_limit_per_minute: int = Field(default=30, description="Лимит LLM-запросов в минуту")
+    rate_limit_per_second: int = Field(default=2, description="Лимит LLM-запросов в секунду")
+    enable_injection_detection: bool = Field(default=True, description="Детекция prompt injection")
+
     # --- RAG ---
     embedding_model: str = Field(
         default="all-MiniLM-L6-v2",
@@ -66,5 +70,4 @@ class Settings(BaseSettings):
     model_config = {"env_prefix": "", "env_file": ".env", "extra": "ignore"}
 
 
-# Глобальный экземпляр настроек
 settings = Settings()

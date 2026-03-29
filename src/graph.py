@@ -27,29 +27,24 @@ logger = logging.getLogger(__name__)
 
 class PipelineState(TypedDict, total=False):
     """Состояние пайплайна, передаваемое между агентами."""
-    # Описание задачи
     task_description: str
     data_path: str
     train_file: str
     test_file: str
     target_column: str
 
-    # Результаты агентов
     eda_report: str
     model_results: str
     critic_feedback: str
 
-    # Текущая модель
     current_model_type: str
     current_hyperparams: str
     current_metrics: dict
 
-    # Управление итерациями
     iteration: int
     max_iterations: int
     is_satisfactory: bool
 
-    # Выход
     submission_path: str
     experiment_history: list
 
@@ -87,7 +82,6 @@ def submit_node(state: PipelineState) -> PipelineState:
     logger.info("SUBMIT: Создание финального submission")
     logger.info("=" * 60)
 
-    # Используем параметры лучшего эксперимента
     best = get_best_experiment()
     if best:
         model_type = best["model_type"]
@@ -98,7 +92,6 @@ def submit_node(state: PipelineState) -> PipelineState:
         hyperparams = state.get("current_hyperparams", "{}")
         logger.info("Используем текущую модель: %s", model_type)
 
-    # Генерация предсказаний
     result = predict_and_submit.invoke({
         "model_type": model_type,
         "hyperparams": hyperparams,
@@ -124,20 +117,17 @@ def build_graph() -> StateGraph:
     """
     graph = StateGraph(PipelineState)
 
-    # Добавляем узлы (агенты)
     graph.add_node("coordinator", coordinator_node)
     graph.add_node("explorer", explorer_node)
     graph.add_node("engineer", engineer_node)
     graph.add_node("critic", critic_node)
     graph.add_node("submit", submit_node)
 
-    # Добавляем рёбра
     graph.add_edge(START, "coordinator")
     graph.add_edge("coordinator", "explorer")
     graph.add_edge("explorer", "engineer")
     graph.add_edge("engineer", "critic")
 
-    # Условное ребро после Critic
     graph.add_conditional_edges(
         "critic",
         route_after_critic,

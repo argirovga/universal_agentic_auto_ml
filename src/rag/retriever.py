@@ -12,7 +12,6 @@ from src.rag.indexer import index_knowledge_base
 
 logger = logging.getLogger(__name__)
 
-# Кэш коллекции — чтобы не переоткрывать при каждом запросе
 _collection_cache: chromadb.Collection | None = None
 
 
@@ -47,7 +46,6 @@ def retrieve_knowledge(query: str, top_k: int | None = None) -> str:
         n_results=min(top_k, collection.count()),
     )
 
-    # Форматируем результаты
     chunks = results["documents"][0]
     metadatas = results["metadatas"][0]
 

@@ -69,12 +69,10 @@ class AgentBenchmark:
             "",
         ]
 
-        # Общее время пайплайна
         if self.pipeline_start and self.pipeline_end:
             total = self.pipeline_end - self.pipeline_start
             parts.append(f"## Pipeline Total Time: {total:.2f}s\n")
 
-        # Метрики по агентам
         parts.append("## Agent Performance\n")
         parts.append("| Agent | Calls | Total Time (s) | Avg Time (s) | Max Time (s) |")
         parts.append("|-------|-------|----------------|--------------|--------------|")
@@ -87,7 +85,6 @@ class AgentBenchmark:
                 f"| {agent_name} | {len(records)} | {total_time:.2f} | {avg_time:.2f} | {max_time:.2f} |"
             )
 
-        # ML метрики из experiment store
         from src.memory.experiment_store import load_history
         history = load_history()
 
@@ -105,7 +102,6 @@ class AgentBenchmark:
 
         report = "\n".join(parts)
 
-        # Сохраняем отчёт
         report_path = settings.output_dir / "benchmark_report.md"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(report, encoding="utf-8")
@@ -114,5 +110,4 @@ class AgentBenchmark:
         return report
 
 
-# Глобальный экземпляр бенчмарка
 benchmark = AgentBenchmark()

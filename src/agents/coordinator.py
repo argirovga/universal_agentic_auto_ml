@@ -26,7 +26,6 @@ def coordinator_node(state: dict) -> dict:
     logger.info("КООРДИНАТОР: Инициализация пайплайна")
     logger.info("=" * 60)
 
-    # Инициализируем состояние
     updated_state = {
         **state,
         "data_path": str(settings.raw_data_dir),

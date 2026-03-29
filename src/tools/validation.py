@@ -46,7 +46,6 @@ def validate_dataframe(df: pd.DataFrame, expected_columns: list[str] | None = No
         if missing:
             raise ValidationError(f"Отсутствуют колонки: {missing}")
 
-    # Проверка на полностью пустые колонки
     fully_empty = [col for col in df.columns if df[col].isna().all()]
     if fully_empty:
         logger.warning("Полностью пустые колонки: %s", fully_empty)
@@ -78,14 +77,12 @@ def validate_predictions(
             f"Неверное количество предсказаний: {len(predictions)}, ожидалось {expected_length}"
         )
 
-    # Проверка на NaN
     nan_count = np.isnan(predictions).sum()
     if nan_count > 0:
         logger.warning("Обнаружено %d NaN в предсказаниях — заменяем медианой.", nan_count)
         median_val = np.nanmedian(predictions)
         predictions = np.where(np.isnan(predictions), median_val, predictions)
 
-    # Клиппинг в допустимый диапазон
     clipped = np.clip(predictions, min_value, max_value)
     n_clipped = (predictions != clipped).sum()
     if n_clipped > 0:

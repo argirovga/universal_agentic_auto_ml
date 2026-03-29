@@ -12,7 +12,6 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-# Путь к файлу с историей экспериментов
 EXPERIMENTS_FILE = settings.output_dir / "experiments.json"
 
 
@@ -48,11 +47,9 @@ def save_experiment(
         "notes": notes,
     }
 
-    # Загружаем существующую историю
     history = load_history()
     history.append(experiment)
 
-    # Сохраняем
     EXPERIMENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(EXPERIMENTS_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2, ensure_ascii=False, default=str)

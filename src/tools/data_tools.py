@@ -9,6 +9,7 @@ import pandas as pd
 from langchain_core.tools import tool
 
 from config.settings import settings
+from src.guardrails import sanitize_file_path, validate_file_size
 from src.tools.validation import log_tool_call, validate_dataframe
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,9 @@ def load_data(file_type: str = "train") -> str:
         Строка с описанием формы, колонок и первых строк.
     """
     path = settings.train_file if file_type == "train" else settings.test_file
+    path = sanitize_file_path(path)
+    if not validate_file_size(path, settings.max_csv_size_mb):
+        return f"Ошибка: файл {path.name} превышает допустимый размер ({settings.max_csv_size_mb} МБ)."
     df = pd.read_csv(path)
     validate_dataframe(df)
 
@@ -51,18 +55,18 @@ def get_data_profile(file_type: str = "train") -> str:
         Подробный профиль данных в текстовом виде.
     """
     path = settings.train_file if file_type == "train" else settings.test_file
+    path = sanitize_file_path(path)
+    if not validate_file_size(path, settings.max_csv_size_mb):
+        return f"Ошибка: файл {path.name} превышает допустимый размер ({settings.max_csv_size_mb} МБ)."
     df = pd.read_csv(path)
 
-    # Пропуски
     missing = df.isnull().sum()
     missing_pct = (missing / len(df) * 100).round(2)
     missing_info = pd.DataFrame({"Пропуски": missing, "% пропусков": missing_pct})
     missing_info = missing_info[missing_info["Пропуски"] > 0]
 
-    # Числовые признаки — статистика
     numeric_stats = df.describe().round(3).to_string()
 
-    # Категориальные признаки — уникальные значения
     cat_cols = df.select_dtypes(include=["object", "string"]).columns.tolist()
     cat_info_parts = []
     for col in cat_cols:
@@ -70,7 +74,6 @@ def get_data_profile(file_type: str = "train") -> str:
         top_values = df[col].value_counts().head(5).to_dict()
         cat_info_parts.append(f"  {col}: {n_unique} уникальных. Топ-5: {top_values}")
 
-    # Целевая переменная (только для train)
     target_info = ""
     if file_type == "train" and settings.target_column in df.columns:
         target = df[settings.target_column]
@@ -101,7 +104,8 @@ def get_correlations() -> str:
     Returns:
         Таблица корреляций, отсортированная по абсолютному значению.
     """
-    df = pd.read_csv(settings.train_file)
+    train_path = sanitize_file_path(settings.train_file)
+    df = pd.read_csv(train_path)
     numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
 
     if settings.target_column not in numeric_cols:
@@ -130,7 +134,8 @@ def get_value_distributions(column: str) -> str:
     Returns:
         Информация о распределении значений.
     """
-    df = pd.read_csv(settings.train_file)
+    train_path = sanitize_file_path(settings.train_file)
+    df = pd.read_csv(train_path)
 
     if column not in df.columns:
         return f"Колонка '{column}' не найдена. Доступные: {list(df.columns)}"
@@ -139,7 +144,6 @@ def get_value_distributions(column: str) -> str:
     parts = [f"=== Распределение: {column} ==="]
 
     if col_data.dtype in ["float64", "int64"]:
-        # Числовая колонка
         parts.extend([
             f"Тип: числовой",
             f"Среднее: {col_data.mean():.3f}",
@@ -151,7 +155,6 @@ def get_value_distributions(column: str) -> str:
             f"Пропуски: {col_data.isna().sum()}",
         ])
     else:
-        # Категориальная колонка
         value_counts = col_data.value_counts()
         parts.extend([
             f"Тип: категориальный",

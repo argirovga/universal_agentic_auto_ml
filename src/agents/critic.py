@@ -11,12 +11,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from config.settings import settings
 from src.benchmark.evaluator import benchmark
+from src.guardrails import detect_prompt_injection, rate_limiter, validate_llm_text_output
 from src.llm.provider import get_llm
 from src.memory.experiment_store import get_best_experiment, get_history_summary
 
 logger = logging.getLogger(__name__)
 
-# Системный промпт для Critic
 CRITIC_SYSTEM_PROMPT = """Ты — Critic, агент для оценки качества ML-моделей.
 
 Твоя задача:
@@ -64,13 +64,11 @@ def critic_node(state: dict) -> dict:
     logger.info("CRITIC: Оценка итерации %d/%d", iteration, max_iterations)
     logger.info("=" * 60)
 
-    # Собираем контекст
     model_results = state.get("model_results", "Нет результатов")
     current_metrics = state.get("current_metrics", {})
     experiment_history = get_history_summary()
     best = get_best_experiment()
 
-    # Проверка жёсткого лимита итераций
     if iteration >= max_iterations:
         logger.info("Достигнут лимит итераций (%d). Переходим к submission.", max_iterations)
         benchmark.track_agent("critic", start_time, time.time(), {"decision": "submit_max_iter"})
@@ -80,11 +78,13 @@ def critic_node(state: dict) -> dict:
             "critic_feedback": f"Достигнут лимит итераций ({max_iterations}). Используем лучший результат.",
         }
 
-    # Формируем запрос к LLM
+    _, model_results_safe = detect_prompt_injection(model_results)
+    _, experiment_history_safe = detect_prompt_injection(experiment_history)
+
     llm_prompt = f"""Итерация: {iteration} из {max_iterations}
 
 === Текущие результаты ===
-{model_results}
+{model_results_safe}
 
 === Текущие метрики ===
 RMSE: {current_metrics.get('rmse', 'N/A')}
@@ -92,7 +92,7 @@ MAE: {current_metrics.get('mae', 'N/A')}
 R²: {current_metrics.get('r2', 'N/A')}
 
 === История экспериментов ===
-{experiment_history}
+{experiment_history_safe}
 
 === Лучший результат ===
 {f"Модель: {best['model_type']}, RMSE: {best['metrics']['rmse']:.4f}, R²: {best['metrics']['r2']:.4f}" if best else "Нет предыдущих результатов"}
@@ -105,12 +105,12 @@ R²: {current_metrics.get('r2', 'N/A')}
         HumanMessage(content=llm_prompt),
     ]
 
+    rate_limiter.wait_if_needed()
     response = llm.invoke(messages)
-    critic_response = response.content
+    critic_response = validate_llm_text_output(response.content)
 
     logger.info("Ответ Critic:\n%s", critic_response)
 
-    # Парсим решение
     is_satisfactory = _parse_decision(critic_response, current_metrics)
 
     decision_str = "SUBMIT" if is_satisfactory else "IMPROVE"
@@ -138,13 +138,11 @@ def _parse_decision(critic_response: str, metrics: dict) -> bool:
     """
     response_upper = critic_response.upper()
 
-    # Ищем явное решение
     if "РЕШЕНИЕ: SUBMIT" in response_upper or "DECISION: SUBMIT" in response_upper:
         return True
     if "РЕШЕНИЕ: IMPROVE" in response_upper or "DECISION: IMPROVE" in response_upper:
         return False
 
-    # Фоллбэк: проверяем метрики
     r2 = metrics.get("r2", 0)
     if r2 >= settings.r2_threshold:
         logger.info("Фоллбэк: R²=%.4f >= %.2f, считаем удовлетворительным.", r2, settings.r2_threshold)

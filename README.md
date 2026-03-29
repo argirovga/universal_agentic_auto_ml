@@ -1,117 +1,298 @@
-# Multi-Agent ML System
+# Мульти-агентная система автоматического машинного обучения
 
-A multi-agent system built with LangGraph for automatic regression on tabular dataset (Kaggle format).
+Мульти-агентная система на базе **LangGraph** для автоматической регрессии на табличных данных. Система самостоятельно анализирует данные, выбирает модель, подбирает гиперпараметры и генерирует submission — всё под управлением LLM.
 
-## Architecture
+## Оглавление
+
+- [Архитектура](#архитектура)
+- [Агенты](#агенты)
+- [Выбор модели](#выбор-модели)
+- [Компоненты системы](#компоненты-системы)
+- [Безопасность](#безопасность)
+- [Структура проекта](#структура-проекта)
+- [Установка и запуск](#установка-и-запуск)
+- [Результаты работы](#результаты-работы)
+- [Тестирование](#тестирование)
+- [Технологический стек](#технологический-стек)
+
+---
+
+## Архитектура
+
+Система построена как направленный граф агентов (LangGraph StateGraph) с итеративным циклом улучшения:
 
 ```
-START -> Coordinator -> Explorer (EDA) -> Engineer (modeling) -> Critic (evaluation)
-                                               ^                      |
-                                               +---- if not good -----+
-                                                     (max 5 iterations)
-                                         if good -> Submission -> END
+START -> Coordinator -> Explorer (EDA) -> Engineer (обучение) -> Critic (оценка)
+                                               ^                       |
+                                               +- если не достаточно  -+
+                                                    (макс. 5 итераций)
+                                          если ОК -> Submission -> END
 ```
 
-### Agents
+**Coordinator** инициализирует пайплайн, **Explorer** проводит разведочный анализ данных, **Engineer** обучает модель по рекомендациям, **Critic** оценивает результат. Если качество недостаточно — цикл повторяется с новыми рекомендациями (до 5 итераций). Когда Critic удовлетворён или достигнут лимит — генерируется финальный submission.
 
-| Agent | Role | Key Actions |
-|-------|------|-------------|
-| **Coordinator** | Initializes pipeline state, describes the task | Sets paths, config |
-| **Explorer** | Exploratory Data Analysis | Data profiling, correlations, feature suggestions |
-| **Engineer** | Model training & feature engineering | Selects model, tunes hyperparameters, trains |
-| **Critic** | Results evaluation & decision-making | Evaluates metrics, decides to iterate or submit |
+---
 
-### Components
+## Агенты
 
-- **LLM Backend**: Dual support — Ollama (local) + HuggingFace Inference API
-- **RAG**: ChromaDB + sentence-transformers knowledge base (ML best practices)
-- **Tools**: Data profiling, ML training/prediction, input validation
-- **Memory**: JSON-based experiment tracking
-- **Benchmarking**: Agent performance metrics + ML metrics reports
-- **Safety**: Input validation, output clipping, timeout guards, error recovery
+| Агент | Роль | Ключевые действия |
+|-------|------|-------------------|
+| **Coordinator** | Инициализация пайплайна | Задаёт пути к данным, описание задачи, конфигурацию |
+| **Explorer** | Разведочный анализ данных (EDA) | Профилирование данных, корреляции, рекомендации по признакам |
+| **Engineer** | Обучение и feature engineering | Выбор модели через LLM, подбор гиперпараметров, обучение |
+| **Critic** | Оценка результатов | Анализ метрик, сравнение с историей, решение SUBMIT/IMPROVE |
 
-## Setup
+Каждый агент использует LLM (Ollama или HuggingFace) для принятия решений и специализированные инструменты (`@tool`) для выполнения действий. Агенты обмениваются информацией через общее состояние графа (`PipelineState`).
 
-```bash
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+---
 
-# Install dependencies
-pip install -r requirements.txt
+## Выбор модели
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your settings (HF_TOKEN, LLM_PROVIDER, etc.)
-```
+### LLM-бэкенды
 
-### Prerequisites
+Система поддерживает два LLM-провайдера — для гибкости между локальным и облачным использованием:
 
-- Python 3.12+
-- Ollama installed with a model (e.g., `ollama pull qwen3-coder:30b`)
-- OR HuggingFace API token for cloud inference
+| Провайдер | Модель | Обоснование |
+|-----------|--------|-------------|
+| **Ollama** (локально) | `qwen3-coder:30b` | Мощная open-source модель для code/reasoning задач. Работает локально — нет ограничений API, бесплатно. 30B параметров дают хорошее качество JSON-генерации и анализа данных |
+| **HuggingFace Inference API** (облако) | `Qwen/Qwen2.5-Coder-32B-Instruct` | Облачная альтернатива для машин без GPU. Бесплатный Inference API, Qwen2.5-Coder — одна из лучших open-source моделей для структурированного вывода |
 
-## Usage
+Выбор пал на семейство **Qwen**, так как эти модели показывают одни из лучших результатов среди open-source LLM на задачах генерации кода и структурированного вывода (JSON), что критически важно для управления ML-пайплайном.
 
-```bash
-# Run with default settings (Ollama)
-python main.py
+### ML-модели для регрессии
 
-# Run with HuggingFace backend
-python main.py --provider huggingface
+Система автоматически выбирает модель через LLM на основе EDA-отчёта. Доступные модели:
 
-# Limit iterations
-python main.py --max-iterations 3
+| Модель | Когда выбирается | Сильные стороны |
+|--------|-------------------|-----------------|
+| **LightGBM** | По умолчанию, первая итерация | Быстрый, хорошо работает с категориальными признаками, устойчив к выбросам |
+| **XGBoost** | При сложных нелинейных зависимостях | Мощная регуляризация, высокая точность на табличных данных |
+| **Random Forest** | При риске переобучения | Ансамбль деревьев, устойчив к шуму, не требует тонкой настройки |
+| **Gradient Boosting** | При небольших датасетах | Классический бустинг из scikit-learn, стабильные результаты |
+| **Ridge** | Как базовая линия | Линейная регрессия с L2-регуляризацией, быстрая, интерпретируемая |
 
-# Override model
-python main.py --model mistral
-```
+**LightGBM** выбран как модель по умолчанию, потому что он оптимален для табличных данных Airbnb: быстро обучается, нативно обрабатывает пропуски, хорошо масштабируется на ~36K строк. Если первая итерация не даёт достаточного качества, LLM-агент переключается на другие модели на основе анализа ошибок.
 
-## Project Structure
+---
+
+## Компоненты системы
+
+### LLM-провайдер (`src/llm/`)
+
+Фабричный паттерн для создания LLM. Функция `get_llm()` возвращает единый интерфейс `BaseChatModel` независимо от бэкенда. Поддерживает горячее переключение между Ollama и HuggingFace через конфигурацию.
+
+- **`provider.py`** — фабрика: маршрутизирует запросы к нужному бэкенду
+- **`ollama_backend.py`** — создаёт `ChatOllama` для локального инференса
+- **`hf_backend.py`** — создаёт `ChatHuggingFace` через HuggingFace Inference API
+
+### RAG-система (`src/rag/`)
+
+Retrieval-Augmented Generation для обогащения промптов агентов знаниями о лучших практиках ML. Использует ChromaDB как векторное хранилище и `sentence-transformers` для эмбеддингов.
+
+- **`indexer.py`** — разбивает markdown-документы из `knowledge_base/documents/` на чанки, создаёт эмбеддинги и сохраняет в ChromaDB
+- **`retriever.py`** — по запросу агента находит топ-K релевантных чанков из базы знаний
+
+Документы в базе знаний:
+- Лучшие практики регрессии
+- Техники feature engineering для табличных данных
+- Стратегии обработки пропусков
+- Подходы к подбору гиперпараметров
+- Специфические советы для датасета Airbnb
+
+### Инструменты (`src/tools/`)
+
+Функции с декоратором `@tool`, вызываемые агентами через LangGraph tool calling:
+
+- **`data_tools.py`** — загрузка данных (`load_data`), профилирование (`get_data_profile`), корреляции (`get_correlations`), распределения (`get_value_distributions`)
+- **`ml_tools.py`** — обучение модели (`train_model`), генерация предсказаний и submission (`predict_and_submit`), подготовка признаков (`_prepare_features`)
+- **`validation.py`** — валидация DataFrame, проверка предсказаний (NaN, диапазон), таймауты, логирование вызовов
+
+### Память экспериментов (`src/memory/`)
+
+Персистентное хранение истории экспериментов в JSON. Позволяет агентам учитывать предыдущие результаты при принятии решений.
+
+- **`experiment_store.py`** — сохранение экспериментов, получение лучшего результата, сводка истории для промптов
+
+### Бенчмаркинг (`src/benchmark/`)
+
+Мониторинг производительности агентов и ML-метрик:
+
+- **`evaluator.py`** — класс `AgentBenchmark`: отслеживает время работы каждого агента, общее время пайплайна, генерирует markdown-отчёт с результатами
+
+### Граф пайплайна (`src/graph.py`)
+
+Определение LangGraph `StateGraph` с типизированным состоянием (`PipelineState`). Описывает маршрутизацию между агентами, условные переходы (Critic -> Engineer при IMPROVE, Critic -> Submission при SUBMIT) и ограничение итераций.
+
+---
+
+## Безопасность
+
+Модуль `src/guardrails.py` реализует комплексную защиту пайплайна:
+
+### Санитизация входов
+- **Защита от path traversal** — `sanitize_file_path()` проверяет, что все файловые пути находятся внутри разрешённых директорий проекта. Блокирует попытки чтения произвольных файлов (например, `/etc/passwd`)
+- **Контроль размера файлов** — `validate_file_size()` отклоняет файлы, превышающие лимит (по умолчанию 500 МБ), до загрузки в память
+- **Валидация гиперпараметров** — `sanitize_hyperparams()` использует allowlist допустимых параметров для каждого типа модели с проверкой типов и диапазонов значений. Неизвестные параметры отбрасываются
+
+### Guardrails для LLM
+- **Детекция prompt injection** — `detect_prompt_injection()` проверяет все данные перед передачей в промпт LLM на наличие 13 паттернов инъекций (например, «ignore previous instructions»). Опасные фрагменты заменяются на `[FILTERED]`
+- **Rate limiting** — `RateLimiter` ограничивает частоту запросов к LLM API (30/мин, 2/сек) через скользящее окно. Потокобезопасный
+- **Валидация JSON-ответов** — `validate_llm_json_output()` извлекает и проверяет JSON из ответов LLM, проверяет обязательные ключи, возвращает дефолты при ошибке парсинга
+- **Валидация текстовых ответов** — `validate_llm_text_output()` обрезает чрезмерно длинные ответы, удаляет потенциально опасные теги
+
+### Существующие меры защиты
+- Валидация DataFrame и предсказаний (`validation.py`)
+- Клиппинг предсказаний в допустимый диапазон [0, 365]
+- Таймауты на обучение моделей (300 сек)
+- Лимит итераций (5) для предотвращения бесконечных циклов
+- Обработка ошибок с graceful degradation
+
+---
+
+## Структура проекта
 
 ```
 llm_auto_ml_competition/
-├── config/settings.py           # Configuration (paths, LLM, ML params)
-├── data/raw_data/               # Train/test datasets
-├── knowledge_base/
-│   ├── documents/               # RAG source documents (MD)
-│   └── chroma_db/               # ChromaDB vector store
+├── main.py                          # Точка входа: CLI-аргументы, логирование, запуск графа
+├── requirements.txt                 # Зависимости Python
+├── README.md                        # Документация проекта
+├── .env                             # Переменные окружения (секреты, токены)
+├── .env.example                     # Шаблон .env
+│
+├── config/
+│   └── settings.py                  # Конфигурация: пути, LLM, ML, RAG, guardrails
+│
 ├── src/
-│   ├── agents/                  # Coordinator, Explorer, Engineer, Critic
-│   ├── llm/                     # LLM provider abstraction (Ollama, HF)
-│   ├── rag/                     # Document indexer + retriever
-│   ├── tools/                   # Data tools, ML tools, validation
-│   ├── memory/                  # Experiment tracking
-│   ├── benchmark/               # Performance evaluation
-│   └── graph.py                 # LangGraph workflow definition
-├── outputs/                     # Submissions, reports, logs
-├── tests/                       # Unit tests
-├── main.py                      # Entry point
-└── requirements.txt
+│   ├── graph.py                     # LangGraph StateGraph — маршрутизация агентов
+│   ├── guardrails.py                # Модуль безопасности: санитизация, rate limiting
+│   │
+│   ├── agents/                      # Агенты пайплайна
+│   │   ├── coordinator.py           #   Инициализация состояния и задачи
+│   │   ├── explorer.py              #   EDA: профилирование, корреляции, рекомендации
+│   │   ├── engineer.py              #   Обучение: выбор модели, гиперпараметры
+│   │   └── critic.py                #   Оценка: метрики, решение SUBMIT/IMPROVE
+│   │
+│   ├── llm/                         # LLM-бэкенды
+│   │   ├── provider.py              #   Фабрика get_llm() — единый интерфейс
+│   │   ├── ollama_backend.py        #   Локальный инференс через Ollama
+│   │   └── hf_backend.py            #   Облачный инференс через HuggingFace API
+│   │
+│   ├── rag/                         # Retrieval-Augmented Generation
+│   │   ├── indexer.py               #   Индексация документов в ChromaDB
+│   │   └── retriever.py             #   Поиск релевантных знаний по запросу
+│   │
+│   ├── tools/                       # Инструменты агентов (@tool)
+│   │   ├── data_tools.py            #   Загрузка, профилирование, корреляции
+│   │   ├── ml_tools.py              #   Обучение моделей, генерация submission
+│   │   └── validation.py            #   Валидация данных, предсказаний, таймауты
+│   │
+│   ├── memory/                      # Хранение экспериментов
+│   │   └── experiment_store.py      #   JSON-персистентность истории обучения
+│   │
+│   └── benchmark/                   # Мониторинг производительности
+│       └── evaluator.py             #   Метрики агентов, генерация отчёта
+│
+├── data/
+│   ├── raw_data/                    # Исходные данные Kaggle
+│   │   ├── train.csv                #   Обучающий датасет (~36K строк)
+│   │   ├── test.csv                 #   Тестовый датасет (~12K строк)
+│   │   ├── solution.csv             #   Истинные значения для проверки
+│   │   └── sample_submition.csv     #   Пример формата submission
+│   └── clean_data/                  # Обработанные данные (резерв)
+│
+├── knowledge_base/
+│   ├── documents/                   # Markdown-документы для RAG
+│   │   ├── regression_best_practices.md
+│   │   ├── feature_engineering_tabular.md
+│   │   ├── handling_missing_values.md
+│   │   ├── hyperparameter_tuning.md
+│   │   └── airbnb_dataset_tips.md
+│   └── chroma_db/                   # Векторное хранилище ChromaDB
+│
+├── outputs/                         # Результаты работы пайплайна
+│   ├── submission.csv               #   Файл для Kaggle
+│   ├── experiments.json             #   История всех экспериментов
+│   ├── benchmark_report.md          #   Отчёт о производительности
+│   └── run.log                      #   Детальный лог выполнения
+│
+└── tests/
+    └── test_tools.py                # Unit-тесты валидации и инструментов
 ```
 
-## Outputs
+---
 
-After running the pipeline, check `outputs/`:
-- `submission.csv` — Kaggle submission file
-- `experiments.json` — Full experiment history
-- `benchmark_report.md` — Agent and model performance report
-- `run.log` — Detailed execution log
+## Установка и запуск
 
-## Testing
+### Требования
+
+- Python 3.12+
+- Ollama с установленной моделью (`ollama pull qwen3-coder:30b`)
+- Или токен HuggingFace API для облачного инференса
+
+### Установка
+
+```bash
+# Создание виртуального окружения
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Установка зависимостей
+pip install -r requirements.txt
+
+# Настройка окружения
+cp .env.example .env
+# Отредактируйте .env: HF_TOKEN, LLM_PROVIDER и др.
+```
+
+### Запуск
+
+```bash
+# С настройками по умолчанию (Ollama)
+python main.py
+
+# С HuggingFace-бэкендом
+python main.py --provider huggingface
+
+# Ограничить число итераций
+python main.py --max-iterations 3
+```
+
+---
+
+## Результаты работы
+
+После запуска пайплайна в директории `outputs/`:
+
+| Файл | Описание |
+|------|----------|
+| `submission.csv` | Файл submission для загрузки на Kaggle |
+| `experiments.json` | Полная история экспериментов с метриками и гиперпараметрами |
+| `benchmark_report.md` | Отчёт о производительности агентов и моделей |
+| `run.log` | Детальный лог выполнения (DEBUG-уровень) |
+
+---
+
+## Тестирование
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-## Tech Stack
+Тесты покрывают: валидацию DataFrame, проверку предсказаний (NaN, клиппинг, длина), загрузку данных, профилирование, корреляции, обучение моделей, хранение экспериментов.
 
-| Component | Technology |
+---
+
+## Технологический стек
+
+| Компонент | Технология |
 |-----------|-----------|
-| Orchestration | LangGraph |
-| LLM (local) | Ollama (qwen3-coder) |
-| LLM (cloud) | HuggingFace Inference API |
-| RAG | ChromaDB + sentence-transformers |
-| ML | scikit-learn, LightGBM, XGBoost |
-| Data | pandas |
-| Config | pydantic-settings, python-dotenv |
+| Оркестрация | LangGraph (StateGraph) |
+| LLM (локально) | Ollama + Qwen3-Coder-30B |
+| LLM (облако) | HuggingFace Inference API + Qwen2.5-Coder-32B |
+| RAG | ChromaDB + sentence-transformers (all-MiniLM-L6-v2) |
+| ML-модели | scikit-learn, LightGBM, XGBoost |
+| Данные | pandas, NumPy |
+| Конфигурация | pydantic-settings, python-dotenv |
+| Безопасность | Собственный модуль guardrails |
+| Тестирование | pytest |
+| Документация | с ллмкой* |
